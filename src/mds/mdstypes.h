@@ -247,7 +247,7 @@ inline void decode(old_inode_t<Allocator> &c, ::ceph::buffer::list::const_iterat
 }
 
 /*
- * like an inode, but for a dir frag 
+ * like an inode, but for a dir frag
  */
 struct fnode_t {
   void encode(ceph::buffer::list &bl) const;
