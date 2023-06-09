@@ -89,6 +89,11 @@ public:
     MonOpRequestRef op,
     const cmdmap_t& cmdmap,
     std::ostream &ss) = 0;
+
+  int set_val(Monitor *mon, FSMap& fsmap, MonOpRequestRef op,
+              const cmdmap_t& cmdmap, std::ostream &ss,
+              Filesystem::ref fs, std::string var,
+              std::string val);
 };
 
 #endif

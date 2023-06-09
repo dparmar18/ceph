@@ -334,402 +334,19 @@ public:
       return -EINVAL;
     }
 
-    auto fs = fsmap.get_filesystem(fs_name);
     string var;
     if (!cmd_getval(cmdmap, "var", var) || var.empty()) {
       ss << "Invalid variable";
       return -EINVAL;
     }
     string val;
-    string interr;
-    int64_t n = 0;
     if (!cmd_getval(cmdmap, "val", val)) {
       return -EINVAL;
     }
-    // we got a string.  see if it contains an int.
-    n = strict_strtoll(val.c_str(), 10, &interr);
-    if (var == "max_mds") {
-      // NOTE: see also "mds set_max_mds", which can modify the same field.
-      if (interr.length()) {
-        ss << interr;
-	return -EINVAL;
-      }
+    auto fs = fsmap.get_filesystem(fsmap.get_filesystem(fs_name)->fscid);
+    int r = set_val(mon, fsmap, op, cmdmap, ss, fs, var, val);
 
-      if (n <= 0) {
-        ss << "You must specify at least one MDS";
-        return -EINVAL;
-      }
-
-      if (n > 1 && n > fs->mds_map.get_max_mds()) {
-	if (fs->mds_map.was_snaps_ever_allowed() &&
-	    !fs->mds_map.allows_multimds_snaps()) {
-	  ss << "multi-active MDS is not allowed while there are snapshots possibly created by pre-mimic MDS";
-	  return -EINVAL;
-	}
-      }
-      if (n > MAX_MDS) {
-        ss << "may not have more than " << MAX_MDS << " MDS ranks";
-        return -EINVAL;
-      }
-
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-	fs->mds_map.clear_flag(CEPH_MDSMAP_NOT_JOINABLE);
-        fs->mds_map.set_max_mds(n);
-      });
-    } else if (var == "inline_data") {
-      bool enable_inline = false;
-      int r = parse_bool(val, &enable_inline, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      if (enable_inline) {
-        bool confirm = false;
-        cmd_getval(cmdmap, "yes_i_really_really_mean_it", confirm);
-	if (!confirm) {
-	  ss << "Inline data support is deprecated and will be removed in a future release. "
-	     << "Add --yes-i-really-really-mean-it if you are certain you want this enabled.";
-	  return -EPERM;
-	}
-	ss << "inline data enabled";
-
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.set_inline_data_enabled(true);
-        });
-      } else {
-	ss << "inline data disabled";
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.set_inline_data_enabled(false);
-        });
-      }
-    } else if (var == "balancer") {
-      if (val.empty()) {
-        ss << "unsetting the metadata load balancer";
-      } else {
-        ss << "setting the metadata load balancer to " << val;
-      }
-      fsmap.modify_filesystem(
-	fs->fscid,
-	[val](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.set_balancer(val);
-        });
-      return true;
-    } else if (var == "bal_rank_mask") {
-      if (val.empty()) {
-        ss << "bal_rank_mask may not be empty";
-	return -EINVAL;
-      }
-
-      if (fs->mds_map.check_special_bal_rank_mask(val, MDSMap::BAL_RANK_MASK_TYPE_ANY) == false) {
-	std::string bin_string;
-	int r = fs->mds_map.hex2bin(val, bin_string, MAX_MDS, ss);
-	if (r != 0) {
-	  return r;
-	}
-      }
-      ss << "setting the metadata balancer rank mask to " << val;
-
-      fsmap.modify_filesystem(
-	fs->fscid,
-	[val](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.set_bal_rank_mask(val);
-        });
-      return true;
-    } else if (var == "max_file_size") {
-      if (interr.length()) {
-	ss << var << " requires an integer value";
-	return -EINVAL;
-      }
-      if (n < CEPH_MIN_STRIPE_UNIT) {
-	ss << var << " must at least " << CEPH_MIN_STRIPE_UNIT;
-	return -ERANGE;
-      }
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-        fs->mds_map.set_max_filesize(n);
-      });
-    } else if (var == "max_xattr_size") {
-      if (interr.length()) {
-	ss << var << " requires an integer value";
-	return -EINVAL;
-      }
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-        fs->mds_map.set_max_xattr_size(n);
-      });
-    } else if (var == "allow_new_snaps") {
-      bool enable_snaps = false;
-      int r = parse_bool(val, &enable_snaps, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      if (!enable_snaps) {
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.clear_snaps_allowed();
-        });
-	ss << "disabled new snapshots";
-      } else {
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-          fs->mds_map.set_snaps_allowed();
-        });
-	ss << "enabled new snapshots";
-      }
-    } else if (var == "allow_multimds") {
-        ss << "Multiple MDS is always enabled. Use the max_mds"
-           << " parameter to control the number of active MDSs"
-           << " allowed. This command is DEPRECATED and will be"
-           << " REMOVED from future releases.";
-    } else if (var == "allow_multimds_snaps") {
-      bool enable = false;
-      int r = parse_bool(val, &enable, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      string confirm;
-      if (!cmd_getval(cmdmap, "confirm", confirm) ||
-	  confirm != "--yes-i-am-really-a-mds") {
-	ss << "Warning! This command is for MDS only. Do not run it manually";
-	return -EPERM;
-      }
-
-      if (enable) {
-	ss << "enabled multimds with snapshot";
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-	  fs->mds_map.set_multimds_snaps_allowed();
-        });
-      } else {
-	ss << "disabled multimds with snapshot";
-        fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-        {
-	  fs->mds_map.clear_multimds_snaps_allowed();
-        });
-      }
-    } else if (var == "allow_dirfrags") {
-        ss << "Directory fragmentation is now permanently enabled."
-           << " This command is DEPRECATED and will be REMOVED from future releases.";
-    } else if (var == "down") {
-      bool is_down = false;
-      int r = parse_bool(val, &is_down, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      ss << fs->mds_map.get_fs_name();
-
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [is_down](std::shared_ptr<Filesystem> fs)
-      {
-	if (is_down) {
-          if (fs->mds_map.get_max_mds() > 0) {
-	    fs->mds_map.set_old_max_mds();
-	    fs->mds_map.set_max_mds(0);
-          } /* else already down! */
-	} else {
-	  mds_rank_t oldmax = fs->mds_map.get_old_max_mds();
-	  fs->mds_map.set_max_mds(oldmax ? oldmax : 1);
-	}
-      });
-
-      if (is_down) {
-	ss << " marked down. ";
-      } else {
-	ss << " marked up, max_mds = " << fs->mds_map.get_max_mds();
-      }
-    } else if (var == "cluster_down" || var == "joinable") {
-      bool joinable = true;
-      int r = parse_bool(val, &joinable, ss);
-      if (r != 0) {
-        return r;
-      }
-      if (var == "cluster_down") {
-        joinable = !joinable;
-      }
-
-      ss << fs->mds_map.get_fs_name();
-
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [joinable](std::shared_ptr<Filesystem> fs)
-      {
-	if (joinable) {
-	  fs->mds_map.clear_flag(CEPH_MDSMAP_NOT_JOINABLE);
-	} else {
-	  fs->mds_map.set_flag(CEPH_MDSMAP_NOT_JOINABLE);
-	}
-      });
-
-      if (joinable) {
-	ss << " marked joinable; MDS may join as newly active.";
-      } else {
-	ss << " marked not joinable; MDS cannot join as newly active.";
-      }
-
-      if (var == "cluster_down") {
-        ss << " WARNING: cluster_down flag is deprecated and will be"
-           << " removed in a future version. Please use \"joinable\".";
-      }
-    } else if (var == "standby_count_wanted") {
-      if (interr.length()) {
-       ss << var << " requires an integer value";
-       return -EINVAL;
-      }
-      if (n < 0) {
-       ss << var << " must be non-negative";
-       return -ERANGE;
-      }
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-        fs->mds_map.set_standby_count_wanted(n);
-      });
-    } else if (var == "session_timeout") {
-      if (interr.length()) {
-       ss << var << " requires an integer value";
-       return -EINVAL;
-      }
-      if (n < 30) {
-       ss << var << " must be at least 30s";
-       return -ERANGE;
-      }
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-        fs->mds_map.set_session_timeout((uint32_t)n);
-      });
-    } else if (var == "session_autoclose") {
-      if (interr.length()) {
-       ss << var << " requires an integer value";
-       return -EINVAL;
-      }
-      if (n < 30) {
-       ss << var << " must be at least 30s";
-       return -ERANGE;
-      }
-      fsmap.modify_filesystem(
-          fs->fscid,
-          [n](std::shared_ptr<Filesystem> fs)
-      {
-        fs->mds_map.set_session_autoclose((uint32_t)n);
-      });
-    } else if (var == "allow_standby_replay") {
-      bool allow = false;
-      int r = parse_bool(val, &allow, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      if (!allow) {
-        if (!mon->osdmon()->is_writeable()) {
-          // not allowed to write yet, so retry when we can
-          mon->osdmon()->wait_for_writeable(op, new PaxosService::C_RetryMessage(mon->mdsmon(), op));
-          return -EAGAIN;
-        }
-        std::vector<mds_gid_t> to_fail;
-        for (const auto& [gid, info]: fs->mds_map.get_mds_info()) {
-          if (info.state == MDSMap::STATE_STANDBY_REPLAY) {
-            to_fail.push_back(gid);
-          }
-        }
-
-        for (const auto& gid : to_fail) {
-          mon->mdsmon()->fail_mds_gid(fsmap, gid);
-        }
-        if (!to_fail.empty()) {
-          mon->osdmon()->propose_pending();
-        }
-      }
-
-      auto f = [allow](auto& fs) {
-        if (allow) {
-          fs->mds_map.set_standby_replay_allowed();
-        } else {
-          fs->mds_map.clear_standby_replay_allowed();
-        }
-      };
-      fsmap.modify_filesystem(fs->fscid, std::move(f));
-    } else if (var == "min_compat_client") {
-      auto vno = ceph_release_from_name(val.c_str());
-      if (!vno) {
-	ss << "version " << val << " is not recognized";
-	return -EINVAL;
-      }
-      ss << "WARNING: setting min_compat_client is deprecated"
-            " and may not do what you want.\n"
-            "The oldest release to set is octopus.\n"
-            "Please migrate to `ceph fs required_client_features ...`.";
-      auto f = [vno](auto&& fs) {
-        fs->mds_map.set_min_compat_client(vno);
-      };
-      fsmap.modify_filesystem(fs->fscid, std::move(f));
-    } else if (var == "refuse_client_session") {
-      bool refuse_session = false;
-      int r = parse_bool(val, &refuse_session, ss);
-      if (r != 0) {
-        return r;
-      }
-
-      if (refuse_session) {
-        if (!(fs->mds_map.test_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION))) {
-          fsmap.modify_filesystem(
-            fs->fscid,
-            [](std::shared_ptr<Filesystem> fs)
-          {
-            fs->mds_map.set_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION);
-          });
-          ss << "client(s) blocked from establishing new session(s)"; 
-        } else {
-          ss << "client(s) already blocked from establishing new session(s)";
-        }     
-      } else {
-          if (fs->mds_map.test_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION)) {
-            fsmap.modify_filesystem(
-              fs->fscid,
-              [](std::shared_ptr<Filesystem> fs)
-            {
-              fs->mds_map.clear_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION);
-            });
-            ss << "client(s) allowed to establish new session(s)"; 
-          } else {
-            ss << "client(s) already allowed to establish new session(s)";
-          }
-      }
-    } else {
-      ss << "unknown variable " << var;
-      return -EINVAL;
-    }
-
-    return 0;
+    return r;
   }
 };
 
@@ -1702,4 +1319,373 @@ int FileSystemCommandHandler::is_op_allowed(
     }
 
   return 1;
+}
+
+int FileSystemCommandHandler::set_val(Monitor *mon, FSMap& fsmap, MonOpRequestRef op,
+            const cmdmap_t& cmdmap, std::ostream &ss, Filesystem::ref fs,
+            std::string var, std::string val) {
+
+    // we got a string.  see if it contains an int.
+    string interr;
+    int64_t n = strict_strtoll(val.c_str(), 10, &interr);
+    if (var == "max_mds") {
+      // NOTE: see also "mds set_max_mds", which can modify the same field.
+      if (interr.length()) {
+        ss << interr;
+	return -EINVAL;
+      }
+
+      if (n <= 0) {
+        ss << "You must specify at least one MDS";
+        return -EINVAL;
+      }
+
+      if (n > 1 && n > fs->mds_map.get_max_mds()) {
+	if (fs->mds_map.was_snaps_ever_allowed() &&
+	    !fs->mds_map.allows_multimds_snaps()) {
+	  ss << "multi-active MDS is not allowed while there are snapshots possibly created by pre-mimic MDS";
+	  return -EINVAL;
+	}
+      }
+      if (n > MAX_MDS) {
+        ss << "may not have more than " << MAX_MDS << " MDS ranks";
+        return -EINVAL;
+      }
+
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+	fs->mds_map.clear_flag(CEPH_MDSMAP_NOT_JOINABLE);
+        fs->mds_map.set_max_mds(n);
+      });
+      ss << "max_mds set to " << n;
+    } else if (var == "inline_data") {
+      bool enable_inline = false;
+      int r = parse_bool(val, &enable_inline, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      if (enable_inline) {
+        bool confirm = false;
+        cmd_getval(cmdmap, "yes_i_really_really_mean_it", confirm);
+	if (!confirm) {
+	  ss << "Inline data support is deprecated and will be removed in a future release. "
+	     << "Add --yes-i-really-really-mean-it if you are certain you want this enabled.";
+	  return -EPERM;
+	}
+	ss << "inline data enabled";
+
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.set_inline_data_enabled(true);
+        });
+      } else {
+	ss << "inline data disabled";
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.set_inline_data_enabled(false);
+        });
+      }
+    } else if (var == "balancer") {
+      if (val.empty()) {
+        ss << "unsetting the metadata load balancer";
+      } else {
+        ss << "setting the metadata load balancer to " << val;
+      }
+      fsmap.modify_filesystem(fs, [val](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.set_balancer(val);
+        });
+      return true;
+    } else if (var == "bal_rank_mask") {
+      if (val.empty()) {
+        ss << "bal_rank_mask may not be empty";
+	return -EINVAL;
+      }
+
+      if (fs->mds_map.check_special_bal_rank_mask(val, MDSMap::BAL_RANK_MASK_TYPE_ANY) == false) {
+	std::string bin_string;
+	int r = fs->mds_map.hex2bin(val, bin_string, MAX_MDS, ss);
+	if (r != 0) {
+	  return r;
+	}
+      }
+      ss << "setting the metadata balancer rank mask to " << val;
+
+      fsmap.modify_filesystem(fs, [val](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.set_bal_rank_mask(val);
+        });
+      return true;
+    } else if (var == "max_file_size") {
+      if (interr.length()) {
+	ss << var << " requires an integer value";
+	return -EINVAL;
+      }
+      if (n < CEPH_MIN_STRIPE_UNIT) {
+	ss << var << " must at least " << CEPH_MIN_STRIPE_UNIT;
+	return -ERANGE;
+      }
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_max_filesize(n);
+      });
+      ss << "max_file_size set to " << n;
+    } else if (var == "max_xattr_size") {
+      if (interr.length()) {
+	ss << var << " requires an integer value";
+	return -EINVAL;
+      }
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_max_xattr_size(n);
+      });
+      ss << "max_xattr_size set to " << n;
+    } else if (var == "allow_new_snaps") {
+      bool enable_snaps = false;
+      int r = parse_bool(val, &enable_snaps, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      if (!enable_snaps) {
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.clear_snaps_allowed();
+        });
+	ss << "disabled new snapshots";
+      } else {
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+          fs->mds_map.set_snaps_allowed();
+        });
+	ss << "enabled new snapshots";
+      }
+    } else if (var == "allow_multimds") {
+        ss << "Multiple MDS is always enabled. Use the max_mds"
+           << " parameter to control the number of active MDSs"
+           << " allowed. This command is DEPRECATED and will be"
+           << " REMOVED from future releases.";
+    } else if (var == "allow_multimds_snaps") {
+      bool enable = false;
+      int r = parse_bool(val, &enable, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      string confirm;
+      if (!cmd_getval(cmdmap, "confirm", confirm) ||
+	  confirm != "--yes-i-am-really-a-mds") {
+	ss << "Warning! This command is for MDS only. Do not run it manually";
+	return -EPERM;
+      }
+
+      if (enable) {
+	ss << "enabled multimds with snapshot";
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+	  fs->mds_map.set_multimds_snaps_allowed();
+        });
+      } else {
+	ss << "disabled multimds with snapshot";
+        fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+        {
+	  fs->mds_map.clear_multimds_snaps_allowed();
+        });
+      }
+    } else if (var == "allow_dirfrags") {
+        ss << "Directory fragmentation is now permanently enabled."
+           << " This command is DEPRECATED and will be REMOVED from future releases.";
+    } else if (var == "down") {
+      bool is_down = false;
+      int r = parse_bool(val, &is_down, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      ss << fs->mds_map.get_fs_name();
+
+      fsmap.modify_filesystem(fs, [is_down](std::shared_ptr<Filesystem> fs)
+      {
+	if (is_down) {
+          if (fs->mds_map.get_max_mds() > 0) {
+	    fs->mds_map.set_old_max_mds();
+	    fs->mds_map.set_max_mds(0);
+          } /* else already down! */
+	} else {
+	  mds_rank_t oldmax = fs->mds_map.get_old_max_mds();
+	  fs->mds_map.set_max_mds(oldmax ? oldmax : 1);
+	}
+      });
+
+      if (is_down) {
+	ss << " marked down. ";
+      } else {
+	ss << " marked up, max_mds = " << fs->mds_map.get_max_mds();
+      }
+    } else if (var == "cluster_down" || var == "joinable") {
+      bool joinable = true;
+      int r = parse_bool(val, &joinable, ss);
+      if (r != 0) {
+        return r;
+      }
+      if (var == "cluster_down") {
+        joinable = !joinable;
+      }
+
+      ss << fs->mds_map.get_fs_name();
+
+      fsmap.modify_filesystem(fs, [joinable](std::shared_ptr<Filesystem> fs)
+      {
+	if (joinable) {
+	  fs->mds_map.clear_flag(CEPH_MDSMAP_NOT_JOINABLE);
+	} else {
+	  fs->mds_map.set_flag(CEPH_MDSMAP_NOT_JOINABLE);
+	}
+      });
+
+      if (joinable) {
+	ss << " marked joinable; MDS may join as newly active.";
+      } else {
+	ss << " marked not joinable; MDS cannot join as newly active.";
+      }
+
+      if (var == "cluster_down") {
+        ss << " WARNING: cluster_down flag is deprecated and will be"
+           << " removed in a future version. Please use \"joinable\".";
+      }
+    } else if (var == "standby_count_wanted") {
+      if (interr.length()) {
+       ss << var << " requires an integer value";
+       return -EINVAL;
+      }
+      if (n < 0) {
+       ss << var << " must be non-negative";
+       return -ERANGE;
+      }
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_standby_count_wanted(n);
+      });
+      ss << "standby_count_wanted set to " << n;
+    } else if (var == "session_timeout") {
+      if (interr.length()) {
+       ss << var << " requires an integer value";
+       return -EINVAL;
+      }
+      if (n < 30) {
+       ss << var << " must be at least 30s";
+       return -ERANGE;
+      }
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_session_timeout((uint32_t)n);
+      });
+      ss << "session_timeout set to " << (uint32_t)n;
+    } else if (var == "session_autoclose") {
+      if (interr.length()) {
+       ss << var << " requires an integer value";
+       return -EINVAL;
+      }
+      if (n < 30) {
+       ss << var << " must be at least 30s";
+       return -ERANGE;
+      }
+      fsmap.modify_filesystem(fs, [n](std::shared_ptr<Filesystem> fs)
+      {
+        fs->mds_map.set_session_autoclose((uint32_t)n);
+      });
+      ss << "session_autoclose set to " << (uint32_t)n;
+    } else if (var == "allow_standby_replay") {
+      bool allow = false;
+      int r = parse_bool(val, &allow, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      if (!allow) {
+        std::vector<mds_gid_t> to_fail;
+        for (const auto& [gid, info]: fs->mds_map.get_mds_info()) {
+          if (info.state == MDSMap::STATE_STANDBY_REPLAY) {
+            to_fail.push_back(gid);
+          }
+        }
+
+        if (!to_fail.empty()) {
+          /*
+          set_val maybe called on a new but uncommited fs, in this case
+          there would be no ranks and thus no standby-replay daemon(s) would
+          be removed. Checking if osdmap is writable straightaway would be
+          futile. Therefore we check it and then fail the MDS(s) only if there
+          are some standby-replay daemon(s) to be failed.
+          */
+          if (!mon->osdmon()->is_writeable()) {
+            // not allowed to write yet, so retry when we can
+            mon->osdmon()->wait_for_writeable(op, new PaxosService::C_RetryMessage(mon->mdsmon(), op));
+            return -EAGAIN;
+          }
+          for (const auto& gid : to_fail) {
+            mon->mdsmon()->fail_mds_gid(fsmap, gid);
+          }
+          mon->osdmon()->propose_pending();
+        }
+      }
+
+      auto f = [allow](auto& fs) {
+        if (allow) {
+          fs->mds_map.set_standby_replay_allowed();
+        } else {
+          fs->mds_map.clear_standby_replay_allowed();
+        }
+      };
+      fsmap.modify_filesystem(fs, std::move(f));
+      ss << (allow ? "standby-replay daemons enabled" :
+             "standby-replay daemons disabled");
+    } else if (var == "min_compat_client") {
+      auto vno = ceph_release_from_name(val.c_str());
+      if (!vno) {
+	ss << "version " << val << " is not recognized";
+	return -EINVAL;
+      }
+      ss << "WARNING: setting min_compat_client is deprecated"
+            " and may not do what you want.\n"
+            "The oldest release to set is octopus.\n"
+            "Please migrate to `ceph fs required_client_features ...`.";
+      auto f = [vno](auto&& fs) {
+        fs->mds_map.set_min_compat_client(vno);
+      };
+      fsmap.modify_filesystem(fs, std::move(f));
+    } else if (var == "refuse_client_session") {
+      bool refuse_session = false;
+      int r = parse_bool(val, &refuse_session, ss);
+      if (r != 0) {
+        return r;
+      }
+
+      if (refuse_session) {
+        if (!(fs->mds_map.test_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION))) {
+          fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+          {
+            fs->mds_map.set_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION);
+          });
+          ss << "client(s) blocked from establishing new session(s)"; 
+        } else {
+          ss << "client(s) already blocked from establishing new session(s)";
+        }     
+      } else {
+          if (fs->mds_map.test_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION)) {
+            fsmap.modify_filesystem(fs, [](std::shared_ptr<Filesystem> fs)
+            {
+              fs->mds_map.clear_flag(CEPH_MDSMAP_REFUSE_CLIENT_SESSION);
+            });
+            ss << "client(s) allowed to establish new session(s)"; 
+          } else {
+            ss << "client(s) already allowed to establish new session(s)";
+          }
+      }
+    } else {
+      ss << "unknown variable " << var;
+      return -EINVAL;
+    }
+    return 0;
 }
