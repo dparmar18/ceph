@@ -414,9 +414,8 @@ public:
    * Create a filesystem and initialize it's MDSMap.
   */
   Filesystem::ref create_filesystem(
-      std::string_view name, int64_t metadata_pool,
-      int64_t data_pool, uint64_t features,
-      fs_cluster_id_t fscid, bool recover);
+      std::string_view name, int64_t metadata_pool, int64_t data_pool,
+      uint64_t features, bool recover);
 
 
   /**

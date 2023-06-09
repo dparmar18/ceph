@@ -248,6 +248,25 @@ class FsNewHandler : public FileSystemCommandHandler
       }
     }
 
+    vector<string> fsops_vec;
+    cmd_getval(cmdmap, "set", fsops_vec);
+    if(!fsops_vec.empty()) {
+      if(fsops_vec[0] != "set") {
+        ss << "invalid command";
+        return -EINVAL;
+      }
+      if(fsops_vec.size() % 2 == 0 || fsops_vec.size() < 2) {
+      /* since "set" is part of fs options vector, if size of vec is divisble
+      by 2, it indicates that the fsops key-value pairs are incomplete e.g.
+      ["set", "max_mds", "2"]   # valid
+      ["set", "max_mds"]        # invalid 
+      */  
+        ss << "incomplete list of key-val pairs provided "
+           << fsops_vec.size() - 1;
+        return -EINVAL;
+      }
+    }
+
     pg_pool_t const *data_pool = mon->osdmon()->osdmap.get_pg_pool(data);
     ceph_assert(data_pool != NULL);  // Checked it existed above
     pg_pool_t const *metadata_pool = mon->osdmon()->osdmap.get_pg_pool(metadata);
@@ -268,6 +287,38 @@ class FsNewHandler : public FileSystemCommandHandler
       mon->osdmon()->wait_for_writeable(op, new PaxosService::C_RetryMessage(mon->mdsmon(), op));
       return -EAGAIN;
     }
+
+    bool recover = false;
+    cmd_getval(cmdmap, "recover", recover);
+
+    auto&& fs = fsmap.create_filesystem(fs_name, metadata, data,
+        mon->get_quorum_con_features(), recover);
+
+    // set fs options
+    int ret = 0;
+    string set_fsops_info;
+    for (size_t i = 1 ; i < fsops_vec.size() ; i+=2) {
+      std::ostringstream oss;
+      ret = set_val(mon, fsmap, op, cmdmap, oss, fs, fsops_vec[i],
+                    fsops_vec[i+1]);
+      if (ret < 0) {
+        ss << oss.str();
+        break;
+      }
+      if ((i + 2) <= fsops_vec.size()) {
+        set_fsops_info.append("; ");
+      }
+      set_fsops_info.append(oss.str());
+    }
+    if (ret < 0) {
+      fsmap.erase_filesystem(fs->fscid);
+      return ret;
+    }
+    fsmap.commit_filesystem(fscid, fs);
+
+    ss << "new fs with metadata pool " << metadata << " and data pool " << data;
+    ss << set_fsops_info;
+
     mon->osdmon()->do_application_enable(data,
 					 pg_pool_t::APPLICATION_NAME_CEPHFS,
 					 "data", fs_name, true);
@@ -285,26 +336,21 @@ class FsNewHandler : public FileSystemCommandHandler
 				   static_cast<double>(4.0));
     mon->osdmon()->propose_pending();
 
-    bool recover = false;
-    cmd_getval(cmdmap, "recover", recover);
-
-    // All checks passed, go ahead and create.
-    auto&& fs = fsmap.create_filesystem(fs_name, metadata, data,
-        mon->get_quorum_con_features(), fscid, recover);
-
-    ss << "new fs with metadata pool " << metadata << " and data pool " << data;
-
     if (recover) {
       return 0;
     }
 
-    // assign a standby to rank 0 to avoid health warnings
-    auto info = fsmap.find_replacement_for({fs->fscid, 0});
+    // assign a standby to all the ranks to avoid health warnings
+    for (int i = 0 ; i < fs->mds_map.get_max_mds() ; ++i) {
+      auto info = fsmap.find_replacement_for({fs->fscid, i});
 
-    if (info) {
-      mon->clog->info() << info->human_name() << " assigned to filesystem "
-          << fs_name << " as rank 0";
-      fsmap.promote(info->global_id, *fs, 0);
+      if (info) {
+        mon->clog->info() << info->human_name() << " assigned to filesystem "
+                          << fs_name << " as rank " << i;
+        fsmap.promote(info->global_id, *fs, i);
+      } else {
+        break;
+      }
     }
 
     return 0;

@@ -450,8 +450,7 @@ mds_gid_t Filesystem::get_standby_replay(mds_gid_t who) const
 }
 
 Filesystem::ref FSMap::create_filesystem(std::string_view name,
-    int64_t metadata_pool, int64_t data_pool, uint64_t features,
-    fs_cluster_id_t fscid, bool recover)
+    int64_t metadata_pool, int64_t data_pool, uint64_t features, bool recover)
 {
   auto fs = Filesystem::create();
   fs->mds_map.epoch = epoch;
