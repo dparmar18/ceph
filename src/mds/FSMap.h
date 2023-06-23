@@ -411,16 +411,22 @@ public:
   bool undamaged(const fs_cluster_id_t fscid, const mds_rank_t rank);
 
   /**
-   * Initialize a Filesystem and assign a fscid.  Update legacy_client_fscid
-   * to point to the new filesystem if it's the only one.
-   *
-   * Caller must already have validated all arguments vs. the existing
-   * FSMap and OSDMap contents.
-   */
+   * Create a filesystem and initialize it's MDSMap.
+  */
   Filesystem::ref create_filesystem(
       std::string_view name, int64_t metadata_pool,
       int64_t data_pool, uint64_t features,
       fs_cluster_id_t fscid, bool recover);
+
+
+  /**
+   * Commit newly intialised filesystem, assign fscid to the it and update
+   * legacy_client_fscid to point to the new filesystem if it's the only one.
+   * 
+   * Caller must already have validated all arguments vs. the existing FSMap
+   * and OSDMap contents.
+  */
+  void commit_filesystem(fs_cluster_id_t fscid, Filesystem::ref fs);    
 
   /**
    * Remove the filesystem (it must exist).  Caller should already
@@ -443,6 +449,17 @@ public:
   void modify_filesystem(fs_cluster_id_t fscid, T&& fn)
   {
     auto& fs = filesystems.at(fscid);
+    fn(fs);
+    fs->mds_map.epoch = epoch;
+  }
+
+  /**
+   * Mutator helper that exposes a non-const Filesystem pointer to `fn`
+   * directly from Filesystem pointer and update epochs appropriately.
+   */
+  template<typename T>
+  void modify_filesystem(Filesystem::ref fs, T&& fn)
+  {
     fn(fs);
     fs->mds_map.epoch = epoch;
   }

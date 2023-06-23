@@ -463,12 +463,6 @@ Filesystem::ref FSMap::create_filesystem(std::string_view name,
   fs->mds_map.created = ceph_clock_now();
   fs->mds_map.modified = ceph_clock_now();
   fs->mds_map.enabled = true;
-  if (fscid == FS_CLUSTER_ID_NONE) {
-    fs->fscid = next_filesystem_id++;
-  } else {
-    fs->fscid = fscid;
-    next_filesystem_id = std::max(fscid,  (fs_cluster_id_t)next_filesystem_id) + 1;
-  }
 
   if (recover) {
     // Populate rank 0 as existing (so don't go into CREATING)
@@ -477,6 +471,18 @@ Filesystem::ref FSMap::create_filesystem(std::string_view name,
     fs->mds_map.failed.insert(mds_rank_t(0));
 
     fs->mds_map.set_flag(CEPH_MDSMAP_NOT_JOINABLE);
+  }
+
+  return fs;
+}
+
+void FSMap::commit_filesystem(fs_cluster_id_t fscid, Filesystem::ref fs)
+{
+  if (fscid == FS_CLUSTER_ID_NONE) {
+    fs->fscid = next_filesystem_id++;
+  } else {
+    fs->fscid = fscid;
+    next_filesystem_id = std::max(fscid,  (fs_cluster_id_t)next_filesystem_id) + 1;
   }
 
   // File system's ID can be FS_CLUSTER_ID_ANONYMOUS if we're recovering
@@ -494,8 +500,6 @@ Filesystem::ref FSMap::create_filesystem(std::string_view name,
   if (filesystems.size() == 1) {
     legacy_client_fscid = fs->fscid;
   }
-
-  return fs;
 }
 
 Filesystem::const_ref FSMap::get_filesystem(std::string_view name) const
