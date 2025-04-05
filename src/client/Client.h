@@ -1777,8 +1777,8 @@ private:
                      uint64_t fpos, int64_t req_ofs, uint64_t req_size,
                      int64_t offset, uint64_t size,
                      bool do_fsync, bool syncdataonly,
-                     bool encrypted)
-      : clnt(clnt), onfinish(onfinish),
+                     bool encrypted, ceph::ref_t<WriteEncMgr> enc_mgr)
+      : clnt(clnt), onfinish(onfinish), enc_mgr(enc_mgr),
         is_file_write(is_file_write), start(start), f(f), in(in), fpos(fpos),
         req_ofs(req_ofs), req_size(req_size),
         offset(offset), size(size), syncdataonly(syncdataonly),
@@ -1803,6 +1803,7 @@ private:
   private:
     Client *clnt;
     Context *onfinish;
+    ceph::ref_t<WriteEncMgr> enc_mgr;
     bool is_file_write;
     utime_t start;
     Fh *f;

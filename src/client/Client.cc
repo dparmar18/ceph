@@ -12572,7 +12572,7 @@ int64_t Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf,
                         start, f, in, fpos,
                         request_offset, request_size,
                         offset, size,
-                        do_fsync, syncdataonly, enc_mgr->encrypted()));
+                        do_fsync, syncdataonly, enc_mgr->encrypted(), enc_mgr));
 
     cwf_iofinish->CWF = cwf.get();
   }
