@@ -104,7 +104,7 @@
     "@types/swagger-ui": "3.52.0",
     "@types/xml2js": "0.4.14",
     "@typescript-eslint/eslint-plugin": "5.27.1",
-    "@typescript-eslint/parser": "5.27.1",
+    "@typescript-eslint/parser": "8.36.0",
     "axe-core": "4.4.3",
     "cypress": "12.17.4",
     "cypress-axe": "1.5.0",
