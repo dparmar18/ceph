@@ -3206,6 +3206,29 @@ cdef class LibCephFS(object):
             raise RuntimeError('expected a directory, regfile or symlink but '
                                f'found something else. src = {self.src_path}')
 
+    def start_reclaim(self, uuid, flags) -> int:
+        uuid = cstr(uuid, 'uuid')
+
+        if not isinstance(flags, int):
+            raise TypeError('flags should be an int')
+        
+        cdef:
+            char* _uuid = uuid
+            unsigned _flags = flags
+            int ret
+        
+        with nogil:
+            ret = ceph_start_reclaim(self.cluster, _uuid, _flags)
+
+        if ret < 0:
+            raise make_ex(ret, f"cannot start reclaim for session with uuid {uuid.decode('utf-8')}:")
+
+        return ret
+
+    def finish_reclaim(self) -> None:
+        with nogil:
+            ceph_finish_reclaim(self.cluster)
+
 
 class UnlinkTreeWorker:
     '''

@@ -323,3 +323,7 @@ cdef nogil:
         pass
     int ceph_get_default_data_pool_name(ceph_mount_info *cmount, char *buf, size_t buflen):
         pass
+    int ceph_start_reclaim(ceph_mount_info *cmount, const char *uuid, unsigned flags):
+        pass
+    void ceph_finish_reclaim(ceph_mount_info *cmount):
+        pass

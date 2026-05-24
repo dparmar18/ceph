@@ -215,3 +215,5 @@ cdef extern from "cephfs/libcephfs.h" nogil:
     int ceph_get_file_layout(ceph_mount_info *cmount, int fh, int *stripe_unit, int *stripe_count, int *object_size, int *pg_pool)
     int ceph_get_file_pool_name(ceph_mount_info *cmount, int fh, char *buf, size_t buflen)
     int ceph_get_default_data_pool_name(ceph_mount_info *cmount, char *buf, size_t buflen)
+    int ceph_start_reclaim(ceph_mount_info *cmount, const char *uuid, unsigned flags)
+    void ceph_finish_reclaim(ceph_mount_info *cmount)
